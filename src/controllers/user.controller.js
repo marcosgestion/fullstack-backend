@@ -1,6 +1,6 @@
 import { createUserSchema, updateUserSchema, userParamsSchema } from "../dto/user.dto.js";
 import { getUsersService, createUserService, updateUserService, deleteUserService } from "../services/user.service.js";
-import { successResponse, errorResponse } from "../helpers/response.helper.js";
+import { successResponse, errorResponse, forbiddenResponse } from "../helpers/response.helper.js";
 
 const getUsers = async (req, res) => {
   try {
@@ -8,9 +8,14 @@ const getUsers = async (req, res) => {
     const users = await getUsersService({
       email,
       id,
+      requesterRole: req.user?.role,
+      requesterId: req.user?.userId,
     });
     return successResponse(res, users, "Usuarios obtenidos correctamente");
   } catch (error) {
+    if (error.statusCode === 403) {
+      return forbiddenResponse(res, error.message || "Acceso denegado", error.errors || null);
+    }
     return errorResponse(res, error.message || "Error interno del servidor", error.statusCode || 500, error.errors || null);
   }
 };

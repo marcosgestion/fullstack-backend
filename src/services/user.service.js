@@ -3,9 +3,26 @@ import User from "../models/user.model.js";
 import Audit from "../models/audit.model.js";
 import mongoose from "mongoose";
 
-const getUsersService = async ({ email, id }) => {
+const getUsersService = async ({ email, id, requesterRole, requesterId }) => {
   console.log("📦 SERVICE → getUsersService");
   try {
+    const role = requesterRole?.toUpperCase();
+    const currentUserId = requesterId?.toString();
+
+    if (!role) {
+      throw {
+        statusCode: 403,
+        message: "No tienes permisos para ver usuarios",
+      };
+    }
+
+    if (role === "GUEST") {
+      throw {
+        statusCode: 403,
+        message: "No tienes permisos para ver usuarios",
+      };
+    }
+
     // Buscar por ID
     if (id) {
       if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -14,6 +31,14 @@ const getUsersService = async ({ email, id }) => {
           message: "Id inválido",
         };
       }
+
+      if (role === "USER" && id !== currentUserId) {
+        throw {
+          statusCode: 403,
+          message: "No tienes permisos para ver este usuario",
+        };
+      }
+
       const user = await User.findById(id).select("-password");
       if (!user) {
         throw {
@@ -21,6 +46,14 @@ const getUsersService = async ({ email, id }) => {
           message: "Usuario no encontrado",
         };
       }
+
+      if (role === "ADMIN" && user.role === "ROOT") {
+        throw {
+          statusCode: 403,
+          message: "No tienes permisos para ver usuarios root",
+        };
+      }
+
       return user;
     }
 
@@ -35,9 +68,41 @@ const getUsersService = async ({ email, id }) => {
           message: "Usuario no encontrado",
         };
       }
+
+      if (role === "USER" && user._id.toString() !== currentUserId) {
+        throw {
+          statusCode: 403,
+          message: "No tienes permisos para ver este usuario",
+        };
+      }
+
+      if (role === "ADMIN" && user.role === "ROOT") {
+        throw {
+          statusCode: 403,
+          message: "No tienes permisos para ver usuarios root",
+        };
+      }
+
       return user;
     }
-    // Obtener todos
+
+    if (role === "USER") {
+      const user = await User.findById(currentUserId).select("-password");
+      if (!user) {
+        throw {
+          statusCode: 404,
+          message: "Usuario no encontrado",
+        };
+      }
+      return user;
+    }
+
+    if (role === "ADMIN") {
+      return await User.find({ role: { $ne: "ROOT" } })
+        .select("-password")
+        .sort({ nombre: 1 });
+    }
+
     return await User.find().select("-password").sort({ nombre: 1 });
   } catch (error) {
     console.error("❌ Error en getUsersService:", error);

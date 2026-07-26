@@ -11,6 +11,8 @@ Backend para gestionar usuarios con autenticación JWT, roles y conexión a Mong
 - bcryptjs
 - Joi para validaciones
 - dotenv para variables de entorno
+- express-rate-limit para control de solicitudes
+- rate-limiter-flexible para protección de fuerza bruta
 
 ## Requisitos
 
@@ -29,7 +31,7 @@ npm install
 3. Crear un archivo .env en la raíz del proyecto con las siguientes variables:
 
 ```env
-PORT=7000
+PORT=3080
 MONGO_URI=mongodb://127.0.0.1:27017/crud-user-back-s6
 JWT_SECRET=mi_super_secreto
 JWT_EXPIRES_IN=1h
@@ -53,7 +55,7 @@ npm start
 La API quedará disponible en:
 
 ```text
-http://localhost:7000
+http://localhost:3080
 ```
 
 ## Estructura del proyecto
@@ -74,9 +76,75 @@ El login devuelve un token JWT. Para los endpoints protegidos, debes enviar este
 Authorization: Bearer <token>
 ```
 
-Además, para los endpoints de actualización y eliminación, el usuario debe tener rol ROOT o ADMIN.
+Además, para los endpoints protegidos el cliente debe enviar un token JWT válido. En el listado de usuarios, la autorización se valida según el rol del token:
 
-> Nota: en la implementación actual, los endpoints GET /users y POST /users están habilitados sin token. Los endpoints PUT /users/:id y DELETE /users/:id sí requieren autenticación y permisos.
+- USER: solo puede ver su propio usuario.
+- ADMIN: puede ver todos los usuarios salvo los ROOT.
+- ROOT: puede ver todos los usuarios.
+- GUEST: recibe un 403 y no puede ver usuarios.
+
+> Nota: los endpoints POST /users, PUT /users/:id y DELETE /users/:id requieren autenticación y permisos de ROOT o ADMIN. El endpoint GET /users ahora también exige token y aplica la regla de permisos descrita anteriormente.
+
+## Protección de seguridad
+
+El backend incorpora mecanismos para reducir abusos y registrar actividad sospechosa en MongoDB.
+
+### Características agregadas
+
+- Rate limit global para limitar la cantidad de solicitudes por ventana de tiempo.
+- Protección de fuerza bruta en la ruta de login, basada en IP + email.
+- Registro automático de eventos en MongoDB con información como IP, método HTTP, ruta, user-agent, email y detalles del incidente.
+
+### Archivos relacionados
+
+- src/middlewares/rateLimit.middleware.js
+- src/middlewares/bruteForce.middleware.js
+- src/models/securityLog.model.js
+
+### Qué se guarda en MongoDB
+
+Cada evento de seguridad queda registrado en la colección SecurityLog con campos como:
+
+- eventType: rate_limit, brute_force o suspicious_request
+- ip
+- method
+- path
+- userAgent
+- userEmail
+- details
+
+### Comportamiento esperado
+
+- Si un cliente excede el límite de solicitudes, la API responde con un 429 y guarda el evento.
+- Si se detectan demasiados intentos fallidos de login, la API responde con un 429 y bloquea temporalmente los reintentos.
+
+### Configuración desde .env
+
+Los valores de protección pueden modificarse sin tocar el código, editando el archivo .env en la raíz del proyecto:
+
+```env
+RATE_LIMIT_WINDOW_MINUTES=15
+RATE_LIMIT_MAX_REQUESTS=100
+LOGIN_WINDOW_MINUTES=15
+LOGIN_MAX_ATTEMPTS=5
+LOGIN_BLOCK_MINUTES=30
+```
+
+- RATE_LIMIT_WINDOW_MINUTES: duración de la ventana de rate limit en minutos.
+- RATE_LIMIT_MAX_REQUESTS: cantidad máxima de solicitudes permitidas en esa ventana.
+- LOGIN_WINDOW_MINUTES: tiempo de la ventana para intentos de login.
+- LOGIN_MAX_ATTEMPTS: cantidad máxima de intentos fallidos permitidos.
+- LOGIN_BLOCK_MINUTES: tiempo de bloqueo tras exceder el límite.
+
+### Probar la seguridad desde la consola
+
+Puedes ejecutar un script de prueba para validar el comportamiento de login y rate limit:
+
+```bash
+npm run test:security
+```
+
+Este script envía peticiones al endpoint de login y luego realiza múltiples solicitudes para comprobar que el middleware de rate limit responda con estado 429 cuando se supera el límite.
 
 ## Endpoints
 
@@ -104,7 +172,7 @@ Content-Type: application/json
 #### Ejemplo con curl
 
 ```bash
-curl -X POST http://localhost:7000/auth/login \
+curl -X POST http://localhost:3080/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"usuario@example.com","password":"123456"}'
 ```
@@ -128,12 +196,14 @@ curl -X POST http://localhost:7000/auth/login \
 
 - Método: GET
 - Ruta: /users
-- Requiere token: No (actualmente)
+- Requiere token: Sí
+- Permisos: se validan según el rol del JWT
 
 #### Headers
 
 ```http
 Content-Type: application/json
+Authorization: Bearer <token>
 ```
 
 #### Query params (opcionales)
@@ -141,22 +211,32 @@ Content-Type: application/json
 - id: filtra por ID de usuario
 - email: filtra por email
 
+#### Comportamiento por rol
+
+- USER: solo puede ver su propio usuario, aunque envíe un id o email de otro usuario.
+- ADMIN: puede ver todos los usuarios excepto los ROOT.
+- ROOT: puede ver todos los usuarios.
+- GUEST: recibe 403 y no puede ver ninguna información.
+
 #### Ejemplo con curl
 
 ```bash
-curl http://localhost:7000/users
+curl http://localhost:3080/users \
+  -H "Authorization: Bearer <token>"
 ```
 
 Filtrar por email:
 
 ```bash
-curl "http://localhost:7000/users?email=usuario@example.com"
+curl "http://localhost:3080/users?email=usuario@example.com" \
+  -H "Authorization: Bearer <token>"
 ```
 
 Filtrar por id:
 
 ```bash
-curl "http://localhost:7000/users?id=64f0c5d4f2b4d4a5c6e7f8a9"
+curl "http://localhost:3080/users?id=64f0c5d4f2b4d4a5c6e7f8a9" \
+  -H "Authorization: Bearer <token>"
 ```
 
 ---
@@ -213,7 +293,7 @@ Content-Type: application/json
 #### Ejemplo con curl
 
 ```bash
-curl -X POST http://localhost:7000/users \
+curl -X POST http://localhost:3080/users \
   -H "Content-Type: application/json" \
   -d '{
     "nombre": "Nicolás",
@@ -273,7 +353,7 @@ Puedes enviar uno o varios de estos campos:
 #### Ejemplo con curl
 
 ```bash
-curl -X PUT http://localhost:7000/users/64f0c5d4f2b4d4a5c6e7f8a9 \
+curl -X PUT http://localhost:3080/users/64f0c5d4f2b4d4a5c6e7f8a9 \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
   -d '{
@@ -304,7 +384,7 @@ No requiere body.
 #### Ejemplo con curl
 
 ```bash
-curl -X DELETE http://localhost:7000/users/64f0c5d4f2b4d4a5c6e7f8a9 \
+curl -X DELETE http://localhost:3080/users/64f0c5d4f2b4d4a5c6e7f8a9 \
   -H "Authorization: Bearer <token>"
 ```
 
