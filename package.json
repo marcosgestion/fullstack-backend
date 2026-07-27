@@ -1,5 +1,5 @@
 {
-  "name": "crud-user-back-s6",
+  "name": "user-management-backend",
   "version": "1.0.0",
   "description": "",
   "main": "app.js",
