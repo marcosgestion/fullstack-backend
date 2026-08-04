@@ -2,7 +2,7 @@
   "name": "user-management-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "app.js",
+  "main": "src/app.js",
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -13,14 +13,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicof31/crud-user-back-s6.git"
+    "url": "git+https://github.com/marcosgestion/fullstack-backend.git"
   },
-  "author": "",
+  "author": "Marcos Fabbro",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/nicof31/crud-user-back-s6/issues"
+    "url": "https://github.com/marcosgestion/fullstack-backend/issues"
   },
-  "homepage": "https://github.com/nicof31/crud-user-back-s6#readme",
+  "homepage": "https://github.com/marcosgestion/fullstack-backend#readme",
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",

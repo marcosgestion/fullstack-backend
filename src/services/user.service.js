@@ -4,6 +4,13 @@ import Audit from "../models/audit.model.js";
 import SecurityLog from "../models/securityLog.model.js";
 import mongoose from "mongoose";
 
+// Serializa un documento de usuario para exponerlo por API, alineado con el
+// resto de los endpoints (id en vez de _id, sin password).
+const serializeUser = (userDoc) => {
+  const { _id, password, __v, ...rest } = userDoc.toObject();
+  return { id: _id, ...rest };
+};
+
 const getUsersService = async ({ email, id, requesterRole, requesterId }) => {
   console.log("📦 SERVICE → getUsersService");
   try {
@@ -201,14 +208,8 @@ const updateUserService = async (id, data, requester, contextInfo) => {
       }
 
       await targetUser.save();
-      
-      return {
-        id: targetUser._id,
-        nombre: targetUser.nombre,
-        apellido: targetUser.apellido,
-        email: targetUser.email,
-        role: targetUser.role,
-      };
+
+      return serializeUser(targetUser);
     }
 
     if (data.email !== undefined) {
@@ -231,13 +232,7 @@ const updateUserService = async (id, data, requester, contextInfo) => {
     }
 
     await targetUser.save();
-    return {
-      id: targetUser._id,
-      nombre: targetUser.nombre,
-      apellido: targetUser.apellido,
-      email: targetUser.email,
-      role: targetUser.role,
-    };
+    return serializeUser(targetUser);
   } catch (error) {
     console.error("❌ Error en updateUserService:", error);
     throw {

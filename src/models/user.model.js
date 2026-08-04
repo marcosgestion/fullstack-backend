@@ -30,6 +30,7 @@ const userSchema = new mongoose.Schema(
     genero: {
       type: String,
       required: true,
+      enum: ["Mujer", "Hombre", "No definido"],
     },
     telefono: {
       type: String,

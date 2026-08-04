@@ -27,7 +27,6 @@ const testRateLimit = async (times = 110) => {
   for (let i = 1; i <= times; i++) {
     try {
       const response = await fetch(`${BASE_URL}/users`);
-      npm;
       console.log(`Request ${i} -> ${response.status}`);
     } catch (error) {
       console.error(`Request ${i} falló:`, error.message);
