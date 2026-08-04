@@ -4,7 +4,7 @@ const securityLogSchema = new mongoose.Schema(
   {
     eventType: {
       type: String,
-      enum: ["rate_limit", "brute_force", "suspicious_request"],
+      enum: ["rate_limit", "brute_force", "suspicious_request", "user_deleted"],
       required: true,
     },
     ip: {

@@ -47,4 +47,56 @@ const loginService = async (data) => {
   }
 };
 
-export { loginService };
+const registerService = async (data) => {
+  try {
+    // 1. Verificar si el usuario ya existe en la base de datos
+    const existingUser = await User.findOne({
+      email: data.email,
+    });
+    if (existingUser) {
+      throw {
+        statusCode: 400,
+        message: "El email ya se encuentra registrado.",
+      };
+    }
+
+    // 2. Encriptar contraseña
+    const hashedPassword = await bcrypt.hash(data.password, 10);
+
+    // 3. Crear nuevo usuario forzando el rol GUEST y enviando valores por defecto requeridos
+    const newUser = await User.create({
+      nombre: data.nombre,
+      apellido: data.apellido,
+      email: data.email,
+      password: hashedPassword,
+      role: "GUEST",
+      fechaNacimiento: data.fechaNacimiento || "2000-01-01",
+      edad: data.edad || 25,
+      genero: data.genero || "No especificado",
+      telefono: data.telefono || "000000",
+      direccion: data.direccion || "Sin dirección",
+      localidad: data.localidad || "Sin localidad",
+      provincia: data.provincia || "Sin provincia",
+      pais: data.pais || "Argentina",
+      codigoPostal: data.codigoPostal || "0000",
+    });
+
+    // 4. Retornar la respuesta simplificada
+    return {
+      id: newUser._id,
+      nombre: newUser.nombre,
+      apellido: newUser.apellido,
+      email: newUser.email,
+      role: newUser.role,
+    };
+  } catch (error) {
+    console.error("❌ Error en registerService:", error);
+    throw {
+      statusCode: error.statusCode || 500,
+      message: error.message || "Error interno del servidor",
+      errors: error.errors || null,
+    };
+  }
+};
+
+export { loginService, registerService };

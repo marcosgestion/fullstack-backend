@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import User from "../models/user.model.js";
 import Audit from "../models/audit.model.js";
+import SecurityLog from "../models/securityLog.model.js";
 import mongoose from "mongoose";
 
 const getUsersService = async ({ email, id, requesterRole, requesterId }) => {
@@ -10,97 +11,57 @@ const getUsersService = async ({ email, id, requesterRole, requesterId }) => {
     const currentUserId = requesterId?.toString();
 
     if (!role) {
-      throw {
-        statusCode: 403,
-        message: "No tienes permisos para ver usuarios",
-      };
+      throw { statusCode: 403, message: "No tienes permisos para ver usuarios" };
     }
 
-    if (role === "GUEST") {
-      throw {
-        statusCode: 403,
-        message: "No tienes permisos para ver usuarios",
-      };
-    }
-
-    // Buscar por ID
     if (id) {
       if (!mongoose.Types.ObjectId.isValid(id)) {
-        throw {
-          statusCode: 400,
-          message: "Id inválido",
-        };
+        throw { statusCode: 400, message: "Id inválido" };
       }
 
-      if (role === "USER" && id !== currentUserId) {
-        throw {
-          statusCode: 403,
-          message: "No tienes permisos para ver este usuario",
-        };
+      if ((role === "USER" || role === "GUEST") && id !== currentUserId) {
+        throw { statusCode: 403, message: "No tienes permisos para ver este usuario" };
       }
 
       const user = await User.findById(id).select("-password");
       if (!user) {
-        throw {
-          statusCode: 404,
-          message: "Usuario no encontrado",
-        };
+        throw { statusCode: 404, message: "Usuario no encontrado" };
       }
 
       if (role === "ADMIN" && user.role === "ROOT") {
-        throw {
-          statusCode: 403,
-          message: "No tienes permisos para ver usuarios root",
-        };
+        throw { statusCode: 403, message: "No tienes permisos para ver usuarios root" };
       }
 
       return user;
     }
 
-    // Buscar por email
     if (email) {
-      const user = await User.findOne({
-        email,
-      }).select("-password");
+      const user = await User.findOne({ email }).select("-password");
       if (!user) {
-        throw {
-          statusCode: 404,
-          message: "Usuario no encontrado",
-        };
+        throw { statusCode: 404, message: "Usuario no encontrado" };
       }
 
-      if (role === "USER" && user._id.toString() !== currentUserId) {
-        throw {
-          statusCode: 403,
-          message: "No tienes permisos para ver este usuario",
-        };
+      if ((role === "USER" || role === "GUEST") && user._id.toString() !== currentUserId) {
+        throw { statusCode: 403, message: "No tienes permisos para ver este usuario" };
       }
 
       if (role === "ADMIN" && user.role === "ROOT") {
-        throw {
-          statusCode: 403,
-          message: "No tienes permisos para ver usuarios root",
-        };
+        throw { statusCode: 403, message: "No tienes permisos para ver usuarios root" };
       }
 
       return user;
     }
 
-    if (role === "USER") {
+    if (role === "USER" || role === "GUEST") {
       const user = await User.findById(currentUserId).select("-password");
       if (!user) {
-        throw {
-          statusCode: 404,
-          message: "Usuario no encontrado",
-        };
+        throw { statusCode: 404, message: "Usuario no encontrado" };
       }
       return user;
     }
 
     if (role === "ADMIN") {
-      return await User.find({ role: { $ne: "ROOT" } })
-        .select("-password")
-        .sort({ nombre: 1 });
+      return await User.find({ role: { $ne: "ROOT" } }).select("-password").sort({ nombre: 1 });
     }
 
     return await User.find().select("-password").sort({ nombre: 1 });
@@ -114,18 +75,30 @@ const getUsersService = async ({ email, id, requesterRole, requesterId }) => {
   }
 };
 
-const createUserService = async (data) => {
+const createUserService = async (data, requester) => {
   console.log("📦 SERVICE → createUserService");
   try {
-    const existUser = await User.findOne({
-      email: data.email,
-    });
-    if (existUser) {
+    const requesterRole = requester?.role;
+
+    if (requesterRole === "ADMIN" && (data.role === "ADMIN" || data.role === "ROOT")) {
       throw {
-        statusCode: 409,
-        message: "El usuario ya existe",
+        statusCode: 403,
+        message: "Acceso denegado: Un ADMIN solo puede crear usuarios con rol USER o GUEST.",
       };
     }
+
+    if (data.role === "ROOT" && requesterRole !== "ROOT") {
+      throw {
+        statusCode: 403,
+        message: "Acceso denegado: Solo un usuario ROOT puede asignar el rol ROOT.",
+      };
+    }
+
+    const existUser = await User.findOne({ email: data.email });
+    if (existUser) {
+      throw { statusCode: 409, message: "El usuario ya existe" };
+    }
+
     const hashedPassword = await bcrypt.hash(data.password, 10);
     const user = new User({
       nombre: data.nombre,
@@ -141,23 +114,15 @@ const createUserService = async (data) => {
       provincia: data.provincia,
       pais: data.pais,
       codigoPostal: data.codigoPostal,
-      role: data.role, // Si no viene, el schema asignará USER
+      role: data.role || "USER",
     });
+
     await user.save();
     return {
       id: user._id,
       nombre: user.nombre,
       apellido: user.apellido,
       email: user.email,
-      fechaNacimiento: user.fechaNacimiento,
-      edad: user.edad,
-      genero: user.genero,
-      telefono: user.telefono,
-      direccion: user.direccion,
-      localidad: user.localidad,
-      provincia: user.provincia,
-      pais: user.pais,
-      codigoPostal: user.codigoPostal,
       role: user.role,
     };
   } catch (error) {
@@ -170,55 +135,108 @@ const createUserService = async (data) => {
   }
 };
 
-const updateUserService = async (id, data) => {
+const updateUserService = async (id, data, requester, contextInfo) => {
   console.log("📦 SERVICE → updateUserService");
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw { statusCode: 400, message: "Id inválido" };
+    }
+
+    const targetUser = await User.findById(id);
+    if (!targetUser) {
+      throw { statusCode: 404, message: "Usuario no encontrado" };
+    }
+
+    const requesterRole = requester?.role;
+    const requesterId = requester?.userId;
+
+    if (targetUser.role === "ROOT" && requesterRole !== "ROOT") {
+      await SecurityLog.create({
+        eventType: "suspicious_request",
+        ip: contextInfo?.ip || "unknown",
+        method: "PUT",
+        path: contextInfo?.path || `/users/${id}`,
+        userId: requesterId,
+        details: {
+          reason: "ALERTA CRÍTICA: Intento de hack / modificación no autorizada sobre usuario ROOT",
+          targetUserId: targetUser._id,
+          targetUserEmail: targetUser.email,
+          attemptedByRole: requesterRole,
+        },
+      });
+
       throw {
-        statusCode: 400,
-        message: "Id inválido",
+        statusCode: 403,
+        message: "Acceso denegado: Intento no autorizado de modificación sobre usuario ROOT. Incidente registrado en SecurityLog.",
       };
     }
-    const user = await User.findById(id);
-    if (!user) {
-      throw {
-        statusCode: 404,
-        message: "Usuario no encontrado",
+
+    if (requesterRole === "ADMIN") {
+      if (targetUser.role === "ADMIN") {
+        throw { statusCode: 403, message: "Acceso denegado: Un ADMIN no puede modificar a otro ADMIN." };
+      }
+      if (data.role && (data.role === "ADMIN" || data.role === "ROOT")) {
+        throw { statusCode: 403, message: "Acceso denegado: Un ADMIN no puede promover usuarios a ADMIN o ROOT." };
+      }
+    }
+
+    if (requesterRole === "USER" || requesterRole === "GUEST") {
+      if (id !== requesterId?.toString()) {
+        throw { statusCode: 403, message: "Acceso denegado: Solo puedes modificar tu propio perfil." };
+      }
+
+      const allowedUserFields = [
+        "nombre", "apellido", "edad", "fechaNacimiento", "genero",
+        "telefono", "direccion", "localidad", "provincia", "pais", "codigoPostal"
+      ];
+
+      allowedUserFields.forEach((field) => {
+        if (data[field] !== undefined) {
+          targetUser[field] = data[field];
+        }
+      });
+
+      if (data.password !== undefined) {
+        targetUser.password = await bcrypt.hash(data.password, 10);
+      }
+
+      await targetUser.save();
+      
+      return {
+        id: targetUser._id,
+        nombre: targetUser.nombre,
+        apellido: targetUser.apellido,
+        email: targetUser.email,
+        role: targetUser.role,
       };
     }
-    // El email existe pero no es modificable
+
     if (data.email !== undefined) {
-      throw {
-        statusCode: 400,
-        message: "El email no puede modificarse",
-      };
+      throw { statusCode: 400, message: "El email no puede modificarse" };
     }
-    const allowedFields = ["nombre", "apellido", "fechaNacimiento", "edad", "genero", "telefono", "direccion", "localidad", "provincia", "pais", "codigoPostal", "role"];
+
+    const allowedFields = [
+      "nombre", "apellido", "fechaNacimiento", "edad", "genero",
+      "telefono", "direccion", "localidad", "provincia", "pais", "codigoPostal", "role"
+    ];
+
     allowedFields.forEach((field) => {
       if (data[field] !== undefined) {
-        user[field] = data[field];
+        targetUser[field] = data[field];
       }
     });
-    // Actualizar password si viene informada
+
     if (data.password !== undefined) {
-      user.password = await bcrypt.hash(data.password, 10);
+      targetUser.password = await bcrypt.hash(data.password, 10);
     }
-    await user.save();
+
+    await targetUser.save();
     return {
-      id: user._id,
-      nombre: user.nombre,
-      apellido: user.apellido,
-      email: user.email,
-      fechaNacimiento: user.fechaNacimiento,
-      edad: user.edad,
-      genero: user.genero,
-      telefono: user.telefono,
-      direccion: user.direccion,
-      localidad: user.localidad,
-      provincia: user.provincia,
-      pais: user.pais,
-      codigoPostal: user.codigoPostal,
-      role: user.role,
+      id: targetUser._id,
+      nombre: targetUser.nombre,
+      apellido: targetUser.apellido,
+      email: targetUser.email,
+      role: targetUser.role,
     };
   } catch (error) {
     console.error("❌ Error en updateUserService:", error);
@@ -230,39 +248,93 @@ const updateUserService = async (id, data) => {
   }
 };
 
-const deleteUserService = async (id) => {
+const deleteUserService = async (id, requester, contextInfo) => {
   console.log("📦 SERVICE → deleteUserService");
   let session;
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw { statusCode: 400, message: "Id inválido" };
+    }
+
+    const requesterRole = requester?.role;
+    const requesterId = requester?.userId;
+
+    if (id === requesterId?.toString()) {
+      throw { statusCode: 403, message: "Operación denegada: No puedes auto-eliminar tu propia cuenta." };
+    }
+
+    const targetUser = await User.findById(id);
+    if (!targetUser) {
+      throw { statusCode: 404, message: "Usuario no encontrado" };
+    }
+
+    if (targetUser.role === "ROOT" && requesterRole !== "ROOT") {
+      await SecurityLog.create({
+        eventType: "suspicious_request",
+        ip: contextInfo?.ip || "unknown",
+        method: "DELETE",
+        path: contextInfo?.path || `/users/${id}`,
+        userId: requesterId,
+        details: {
+          reason: "ALERTA CRÍTICA: Intento de hack / eliminación no autorizada sobre usuario ROOT",
+          targetUserId: targetUser._id,
+          targetUserEmail: targetUser.email,
+          attemptedByRole: requesterRole,
+        },
+      });
+
       throw {
-        statusCode: 400,
-        message: "Id inválido",
+        statusCode: 403,
+        message: "Acceso denegado: Intento no autorizado de eliminación sobre usuario ROOT. Incidente registrado en SecurityLog.",
       };
     }
+
+    if (requesterRole === "ADMIN" && (targetUser.role === "ADMIN" || targetUser.role === "ROOT")) {
+      throw { statusCode: 403, message: "Acceso denegado: Un ADMIN solo puede eliminar usuarios con rol USER o GUEST." };
+    }
+
     session = await mongoose.startSession();
     await session.withTransaction(async () => {
-      const user = await User.findById(id).session(session);
-      if (!user) {
-        throw {
-          statusCode: 404,
-          message: "Usuario no encontrado",
-        };
-      }
+      // 1. Registro en Audit original
       await Audit.create(
         [
           {
-            usuarioEliminado: user.toObject(),
+            usuarioEliminado: targetUser.toObject(),
             fechaEliminacion: new Date(),
           },
         ],
-        { session },
+        { session }
       );
-      await user.deleteOne({ session });
+
+      // 2. Registro detallado en SecurityLog con motivo proporcionado desde el Frontend
+      await SecurityLog.create(
+        [
+          {
+            eventType: "user_deleted",
+            ip: contextInfo?.ip || "unknown",
+            method: contextInfo?.method || "DELETE",
+            path: contextInfo?.path || `/users/${id}`,
+            userAgent: contextInfo?.userAgent || "",
+            userEmail: requester?.email || "desconocido",
+            userId: requesterId || null,
+            details: {
+              action: "DELETE_USER",
+              targetUserId: targetUser._id,
+              targetUserEmail: targetUser.email,
+              targetUserRole: targetUser.role,
+              targetUserName: `${targetUser.nombre} ${targetUser.apellido}`,
+              motivo: contextInfo?.motivo || "No especificado por el administrador",
+            },
+          },
+        ],
+        { session }
+      );
+
+      // 3. Eliminación del usuario
+      await targetUser.deleteOne({ session });
     });
-    return {
-      message: "Usuario eliminado",
-    };
+
+    return { message: "Usuario eliminado y auditado correctamente" };
   } catch (error) {
     console.error("❌ Error en deleteUserService:", error);
     throw {
