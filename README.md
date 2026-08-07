@@ -1,142 +1,173 @@
-# LP Gestión - API REST Server
+# LP Gestión — Backend
 
-Backend robusto para el sistema **LP Gestión**, desarrollado con Node.js y Express. Este proyecto implementa una arquitectura por capas orientada a la escalabilidad, gestionando la autenticación, autorización basada en roles (RBAC) y un sistema avanzado de seguridad con auditoría estricta de acciones en MongoDB.
+Servidor de la API del sistema **LP Gestión**, desarrollado con Node.js y Express. Se encarga del inicio de sesión, el registro de usuarios, el sistema de roles y permisos, y el registro de auditoría de las acciones que se hacen sobre los datos, todo guardado en una base de datos MongoDB.
+
+Este proyecto parte de una base de código entregada por la cátedra, con la arquitectura general (organización por capas, elección de tecnologías, sistema de roles) ya definida. El trabajo propio consistió en corregir errores de seguridad y de lógica, completar validaciones que faltaban, y prolijar la configuración del proyecto — con apoyo de una herramienta de inteligencia artificial durante el desarrollo, tal como se transparentó desde el principio.
 
 ---
 
-## 🏗️ Arquitectura por Capas
+## Estructura del proyecto
 
-El proyecto está estructurado utilizando el patrón de diseño de **Arquitectura por Capas** para garantizar la separación de responsabilidades, facilitando el mantenimiento y la escalabilidad del código.
+El código está organizado por capas, separando cada responsabilidad en su propia carpeta:
 
 ```text
 src/
-├── config/         # Configuraciones globales (Variables de entorno, base de datos, CORS)
-├── controllers/    # Controladores: Manejan las peticiones HTTP y formatean las respuestas
-├── dto/            # Data Transfer Objects: Esquemas de validación de entrada de datos (Joi)
-├── helpers/        # Funciones auxiliares genéricas (Formateo unificado de respuestas HTTP)
-├── middlewares/    # Interceptores (Autenticación JWT, control de roles, Rate Limiting)
-├── models/         # Esquemas y modelos de datos (Mongoose ODM)
-├── routes/         # Definición de endpoints y mapeo con middlewares/controladores
-├── services/       # Lógica de negocio core e interacción con la base de datos
-└── app.js          # Punto de entrada de la aplicación y configuración de Express
+├── app.js          # Arranca el servidor: conecta los middlewares, las rutas y la base de datos
+├── config/         # Variables de entorno, conexión a la base de datos, configuración de CORS
+├── controllers/    # Reciben la petición HTTP y llaman a la función que corresponde
+├── dto/            # Reglas de validación de los datos que llegan en cada petición
+├── helpers/        # Funciones chicas reutilizables (dar formato a las respuestas del servidor)
+├── middlewares/     # Funciones que se ejecutan antes que el controlador: verifican el token de sesión, el rol, y limitan la cantidad de peticiones
+├── models/          # Definición de cómo se guardan los datos en la base de datos
+├── routes/          # Qué dirección (endpoint) existe y qué funciones se ejecutan en cada una
+└── services/        # Toda la lógica de negocio real: qué se permite hacer y qué no
 ```
 
+La razón de separar el controlador del servicio es que el controlador solo debería ocuparse de la comunicación HTTP (leer la petición, devolver una respuesta), mientras que el servicio contiene las reglas del negocio sin depender de ningún detalle técnico del servidor web. Si en algún momento se necesitara reutilizar esa misma lógica desde otro lugar (por ejemplo, un script de línea de comandos), no habría que reescribirla.
+
 ---
 
-## 🛠️ Stack Tecnológico Principal
+## Tecnologías utilizadas
 
-| Tecnología | Propósito en el Proyecto |
+| Tecnología | Para qué se usa |
 | :--- | :--- |
-| **Node.js + Express** | Entorno de ejecución y framework minimalista para la API REST. |
-| **MongoDB + Mongoose** | Base de datos NoSQL y ODM para modelado de datos y transacciones seguras. |
-| **JSON Web Tokens (JWT)** | Autenticación stateless y transmisión segura de la identidad/rol del usuario. |
-| **Bcryptjs** | Encriptación unidireccional (hashing) de contraseñas. |
-| **Joi** | Validación estricta de esquemas de datos en los requests (Data Transfer Objects). |
-| **express-rate-limit** | Prevención de ataques DoS limitando el volumen general de peticiones. |
-| **rate-limiter-flexible** | Mitigación activa de ataques de fuerza bruta específicos en memoria. |
-| **Cors** | Control de acceso HTTP configurado para orígenes estrictamente definidos. |
+| **Node.js + Express** | Motor de ejecución y framework del servidor. |
+| **MongoDB + Mongoose** | Base de datos y la librería que traduce entre el código y la base de datos. |
+| **Tokens firmados (JSON Web Token)** | Forma de mantener la sesión iniciada sin que el servidor tenga que recordar quién está conectado: el propio token contiene esa información y vence solo después de un tiempo. |
+| **Bcrypt** | Encriptación de contraseñas: nunca se guarda una contraseña en texto plano en la base de datos. |
+| **Joi** | Validación de los datos que llegan en cada petición, antes de intentar guardarlos. |
+| **express-rate-limit** | Límite general de peticiones por dirección IP, para evitar sobrecargas o ataques automatizados. |
+| **rate-limiter-flexible** | Límite específico de intentos de inicio de sesión, para frenar intentos repetidos de adivinar una contraseña. |
+| **Cors** | Configuración que define qué sitios web tienen permitido llamar a esta API. |
 
 ---
 
-## 🛡️ Seguridad, Auditoría y Reglas de Negocio
+## Seguridad y control de acceso
 
-Este backend no solo gestiona datos, sino que implementa desafíos técnicos avanzados de seguridad para un entorno de producción:
+### Capas de protección
 
-### 1. Auditoría Dual y Transacciones (Mongoose Sessions)
-Cada vez que un usuario es eliminado, el sistema ejecuta una **transacción** en la base de datos que garantiza dos acciones simultáneas o ninguna:
-*   Registro en la colección `Audit` de los datos del usuario borrado.
-*   Registro en `SecurityLog` detallando el método, IP, administrador responsable y el **motivo exacto** de la eliminación ingresado desde el frontend.
+Una petición que llega al servidor pasa, en orden, por varias verificaciones antes de ejecutarse:
 
-### 2. Protección de Jerarquía (Prevención de Hacks)
-Existe una restricción crítica en la capa de servicios: **Ningún usuario con rol ADMIN puede modificar o eliminar a un usuario con rol ROOT**. 
-Si se detecta este comportamiento, la API no solo rechaza la petición (HTTP 403), sino que genera automáticamente un log en la base de datos (`SecurityLog`) catalogado como un **incidente crítico (Intento de hack)** para mantener un registro histórico de accesos malintencionados.
+1. **Límite general de peticiones** — nadie puede mandar una cantidad excesiva de peticiones en poco tiempo a la API completa.
+2. **Límite de intentos de inicio de sesión** — además del límite general, el inicio de sesión tiene su propio contador por combinación de dirección IP y email, para frenar intentos repetidos de adivinar una contraseña.
+3. **Verificación del token de sesión** — se comprueba que el token enviado sea válido y no haya vencido.
+4. **Verificación de rol** — ya identificado el usuario, se comprueba que su rol tenga permiso para la acción que está pidiendo.
+5. **Reglas específicas de cada operación** — algunas reglas son demasiado específicas para resolverse con una verificación genérica. Por ejemplo: un usuario con rol de administrador no puede modificar a otro administrador, ni a un superusuario. Estas reglas viven directamente en la lógica de negocio de cada operación.
 
-### 3. Rate Limiting y Anti-Fuerza Bruta
-*   **Rate Limit Global:** Restringido a 100 peticiones cada 15 minutos por IP. Los excesos quedan guardados en los logs de seguridad.
-*   **Fuerza Bruta (Login):** Si un cliente falla su inicio de sesión 5 veces en menos de 15 minutos, la IP queda bloqueada temporalmente por 3 minutos antes de permitir un nuevo intento.
+### Corrección al límite de intentos de inicio de sesión
 
-### 4. Matriz de Roles (RBAC)
-*   **ROOT:** Control absoluto del sistema. Único rol capaz de crear/modificar otros ROOTs.
-*   **ADMIN:** Gestor operativo. Puede crear/editar usuarios estándar y visualizar la base de datos, pero no interactúa con perfiles ROOT ni puede auto-promoverse.
-*   **USER:** Usuario estándar. Solo tiene permisos para editar sus propios datos no críticos.
-*   **GUEST:** Rol de solo lectura personal. Se asigna por defecto en el auto-registro.
+Se encontró un error en el que el contador de intentos fallidos se descontaba apenas llegaba la petición, sin importar si la contraseña ingresada resultaba correcta. Esto provocaba que un usuario que iniciaba sesión correctamente varias veces seguidas (por ejemplo, al cerrar sesión y volver a entrar) terminara bloqueado por un rato sin haber cometido ningún error real.
+
+Se corrigió separando las dos partes: primero se consulta si esa combinación de dirección IP y email ya está bloqueada (sin gastar ningún intento en esa consulta), y recién se descuenta un intento cuando el inicio de sesión efectivamente falla por una contraseña o usuario incorrectos. Con esto, iniciar sesión correctamente nunca cuenta en contra, y los intentos de adivinar una contraseña siguen frenados igual que antes.
+
+### Validación de datos de entrada
+
+Cada dato que llega a través de un endpoint (crear un usuario, actualizarlo, registrarse) se valida primero con un conjunto de reglas antes de intentar guardarlo en la base de datos. Esto permite devolver un mensaje de error claro y específico (por ejemplo, "el email no tiene un formato válido") en vez de un error genérico del servidor que no le dice nada útil a quien está usando la aplicación.
+
+El registro público de nuevas cuentas no tenía este tipo de validación al principio — solo la tenía la creación de usuarios desde el panel administrativo. Se agregó, porque cualquier punto de entrada abierto al público merece la misma revisión que uno protegido.
+
+### Registro de auditoría
+
+Cada vez que se elimina un usuario, el sistema realiza dos registros de forma conjunta: una copia completa de los datos del usuario eliminado (para conservar un historial de lo que existía), y un registro de seguridad con quién hizo la eliminación, desde qué dirección IP, y el motivo exacto que se escribió al confirmar el borrado. Estas dos escrituras se hacen dentro de una única operación de base de datos: o se completan las dos, o no se completa ninguna, para que nunca quede un usuario borrado sin su rastro de auditoría correspondiente.
+
+También queda un registro cuando se detecta un intento de modificar o eliminar a un usuario con el rol más alto (superusuario) por parte de alguien que no tiene ese mismo rol — ese intento se guarda como una alerta de seguridad, aunque la acción en sí sea rechazada.
+
+### Sistema de roles
+
+Existen cuatro niveles de acceso, de menor a mayor privilegio: **invitado**, **usuario**, **administrador** y **superusuario**. Algunas reglas puntuales:
+
+- Un administrador no puede modificar a otro administrador (si pudiera, un administrador comprometido podría bajar de rango a los demás y quedarse con el control exclusivo del sistema).
+- Nadie que no tenga el rol de superusuario puede modificar o eliminar a un usuario con ese rol.
+- Un usuario común o invitado solo puede editar su propio perfil, y únicamente los campos que no comprometen la seguridad (no puede, por ejemplo, cambiarse el rol a sí mismo).
+- Nadie puede eliminar su propia cuenta desde el panel — si la única cuenta de superusuario se borrara a sí misma por error, nadie más podría administrar el sistema.
 
 ---
 
-## ⚙️ Configuración del Entorno (.env)
+## Configuración del entorno
 
-Para correr este proyecto, debes crear un archivo `.env` en la raíz replicando la siguiente estructura con tus propias credenciales:
+El proyecto necesita un archivo `.env` en la raíz con estas variables (los valores de ejemplo hay que reemplazarlos por los reales):
 
 ```env
-# Puerto de ejecución del servidor local
+# Puerto donde corre el servidor
 PORT=3080
 
-# Conexión a MongoDB Atlas (Reemplazar <PASSWORD> por tu contraseña real)
-MONGO_URI=mongodb+srv://backendadmin:<PASSWORD>@marcosf.2eb5ean.mongodb.net/user_management_db
+# Cadena de conexión a la base de datos MongoDB
+MONGO_URI=mongodb+srv://usuario:<CONTRASEÑA>@tu-cluster.mongodb.net/nombre_de_base
 
-# Seguridad JWT
-JWT_SECRET=miSuperSecretKey
+# Configuración de los tokens de sesión
+JWT_SECRET=<una-clave-secreta-propia>
 JWT_EXPIRES_IN=3m
 
-# Dominios autorizados por CORS (Separados por coma, sin espacios extra)
-FRONTEND_URLS=http://localhost:5173,http://localhost:3080,[https://app.miempresa.com](https://app.miempresa.com),[https://admin.miempresa.com](https://admin.miempresa.com),[http://192.168.10.210:5173](http://192.168.10.210:5173)
+# Direcciones desde las que se permite llamar a esta API, separadas por coma
+FRONTEND_URLS=http://localhost:5173,http://localhost:3080
 
-# ===============================
-# RATE LIMIT GLOBAL
-# ===============================
+# Límite general de peticiones
 RATE_LIMIT_WINDOW_MINUTES=15
 RATE_LIMIT_MAX_REQUESTS=100
 
-# ===============================
-# PROTECCIÓN ANTI-FUERZA BRUTA (LOGIN)
-# ===============================
+# Límite de intentos de inicio de sesión
 LOGIN_WINDOW_MINUTES=15
 LOGIN_MAX_ATTEMPTS=5
-LOGIN_BLOCK_MINUTES=3
+LOGIN_BLOCK_MINUTES=30
+```
+
+Este archivo nunca se sube al repositorio (está excluido mediante `.gitignore`), porque contiene las credenciales reales del sistema.
+
+---
+
+## Instalación y ejecución
+
+```bash
+# 1. Clonar el repositorio e instalar dependencias
+git clone https://github.com/marcosgestion/fullstack-backend.git
+cd fullstack-backend
+npm install
+
+# 2. Levantar el servidor en modo desarrollo (se reinicia solo ante cada cambio)
+npm run dev
+
+# 3. Levantar el servidor en modo producción
+npm start
+
+# 4. Dar formato al código
+npm run format
 ```
 
 ---
 
-## 🚀 Instalación y Ejecución
+## Endpoints disponibles
 
-1. **Clonar y preparar el repositorio:**
-   ```bash
-   git clone [https://github.com/marcosgestion/fullstack-backend.git](https://github.com/marcosgestion/fullstack-backend.git)
-   cd fullstack-backend
-   npm install
-   ```
+Todos los endpoints, salvo el inicio de sesión y el registro, requieren enviar el token de sesión en la petición.
 
-2. **Ejecución en Entorno de Desarrollo (con hot-reload):**
-   ```bash
-   npm run dev
-   ```
+| Método | Dirección | Qué hace | Quién puede usarlo |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/auth/login` | Inicia sesión y devuelve el token | Cualquiera |
+| `POST` | `/auth/register` | Crea una cuenta nueva (siempre con el rol más bajo) | Cualquiera |
+| `GET` | `/users` | Devuelve el listado de usuarios | Cualquier rol con sesión iniciada |
+| `POST` | `/users` | Crea un usuario nuevo desde el panel | Administrador, superusuario |
+| `PUT` | `/users/:id` | Actualiza los datos de un usuario | Todos, con restricciones según el rol |
+| `DELETE` | `/users/:id` | Elimina un usuario (exige un motivo) | Administrador, superusuario |
 
-3. **Ejecución en Producción:**
-   ```bash
-   npm start
-   ```
-
-4. **Scripts adicionales de mantenimiento:**
-   ```bash
-   npm run format       # Formatea el código fuente utilizando Prettier
-   npm run format:check # Verifica el formato del código sin aplicar cambios
-   ```
+Un detalle importante: la respuesta de los endpoints de consulta y actualización no es siempre la misma para todos. Un usuario común o invitado solo puede ver o modificar su propia información, sin importar qué identificador intente consultar en la dirección.
 
 ---
 
-## 📍 Endpoints Principales
+## Cambios realizados sobre la base del proyecto
 
-Todos los endpoints (excepto el login y el registro público) requieren el envío del header: `Authorization: Bearer <TOKEN>`.
+Estos son los cambios y correcciones concretas que se hicieron sobre el código entregado por la cátedra:
 
-| Método | Endpoint | Descripción | Permisos |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/auth/login` | Autentica al usuario y devuelve el JWT | Público |
-| `POST` | `/auth/register` | Registro público de un usuario (Rol GUEST) | Público |
-| `GET` | `/users` | Obtiene el directorio de usuarios | ROOT, ADMIN, USER, GUEST |
-| `POST` | `/users` | Creación de usuario desde el panel | ROOT, ADMIN |
-| `PUT` | `/users/:id` | Actualización de datos de perfil | ROOT, ADMIN, USER, GUEST |
-| `DELETE` | `/users/:id` | Eliminación de usuario (Requiere Motivo) | ROOT, ADMIN |
+- **Límite de intentos de inicio de sesión mal calculado:** contaba también los inicios de sesión exitosos, lo que podía bloquear a un usuario legítimo sin motivo. Se corrigió para que solo cuenten los intentos fallidos.
+- **Registro público sin validación:** el endpoint de registro de nuevas cuentas no verificaba los datos de entrada antes de guardarlos. Se agregó la misma validación que ya tenía la creación de usuarios desde el panel.
+- **Datos incompletos al actualizar un usuario:** al editar el perfil de un usuario, el servidor devolvía solo una parte de los datos actualizados, lo que hacía que la pantalla mostrara información desactualizada hasta recargar la página a mano. Se corrigió para que devuelva el usuario completo.
+- **Configuración del proyecto desactualizada:** el archivo de configuración (`package.json`) tenía las direcciones de un repositorio ajeno, quedadas de cuando se armó el proyecto a partir de una plantilla. Se actualizó para que apunte al repositorio real.
+- **Dependencias con vulnerabilidades conocidas:** se actualizaron las librerías del proyecto para resolver alertas de seguridad detectadas automáticamente.
+- **Errores menores:** una línea de código sobrante en un script de pruebas manuales, y mensajes promocionales innecesarios que aparecían en la consola al iniciar el servidor.
 
-> **Nota sobre Endpoints:** Las respuestas a los métodos `GET` y `PUT` varían dinámicamente. Un `USER` o `GUEST` solo visualizará o actualizará su propia información, garantizando la privacidad de los datos ajenos independientemente del ID que intente consultar en la URL.
+---
 
+## Qué faltaría para seguir mejorando
 
+- Pruebas automatizadas reales (hoy solo existe un script manual de verificación).
+- Mover el límite de intentos de inicio de sesión de la memoria del servidor a un almacenamiento persistente, para que no se reinicie cada vez que el servidor se reinicia.
+- Revisión periódica de vulnerabilidades en las dependencias del proyecto.
+- Documentación formal de los endpoints, para no depender de leer el código para saber qué espera cada uno.
