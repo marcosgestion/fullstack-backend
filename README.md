@@ -2,7 +2,7 @@
 
 Servidor de la API del sistema **LP Gestión**, desarrollado con Node.js y Express. Se encarga del inicio de sesión, el registro de usuarios, el sistema de roles y permisos, y el registro de auditoría de las acciones que se hacen sobre los datos, todo guardado en una base de datos MongoDB.
 
-Este proyecto parte de una base de código entregada por la cátedra, con la arquitectura general (organización por capas, elección de tecnologías, sistema de roles) ya definida. El trabajo propio consistió en corregir errores de seguridad y de lógica, completar validaciones que faltaban, y prolijar la configuración del proyecto — con apoyo de una herramienta de inteligencia artificial durante el desarrollo, tal como se transparentó desde el principio.
+Este proyecto parte de una base de código entregada por la cátedra, con la arquitectura general (organización por capas, elección de tecnologías, sistema de roles) ya definida. El trabajo propio consistió en corregir errores de seguridad y de lógica, completar validaciones que faltaban, y prolijar la configuración del proyecto.
 
 ---
 
